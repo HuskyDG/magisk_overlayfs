@@ -9,6 +9,8 @@
 #include <string_view>
 #include <string>
 #include <selinux/selinux.h>
+#include <limits.h>
+#include <stdlib.h>
 
 int mkdirs(const char *path, int mode) {
     char *s = strdup(path);
@@ -214,7 +216,7 @@ bool mkdir_ensure(const char *path, int mode) {
 }
 
 
-int main(int argc, const char **argv) {
+int overlay_main(int argc, char **argv) {
 #if FAKE_CODE
     if (getuid() != 0) {
         execlp("su", "su", "-c", argv[0], 0);
@@ -419,4 +421,21 @@ int main(int argc, const char **argv) {
     printf("mount done!\n");
     CLEANUP
     return 0;
+}
+
+#define OVERLAY_PATH "/data/overlayfs"
+
+int main(int argc, char **argv) {
+    if (getpid() != 1)
+        return overlay_main(argc, argv);
+    // In INIT process
+    char *path = realpath(argv[0], nullptr);
+    char *new_argv[] = { path, strdup(OVERLAY_PATH), nullptr };
+    mkdir(OVERLAY_PATH, 0755);
+    overlay_main(2, new_argv);
+    umount2(path, MNT_DETACH);
+    free(new_argv[0]);
+    free(new_argv[1]);
+    execv(path, argv);
+    return -1;
 }
