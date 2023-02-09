@@ -11,20 +11,113 @@
 #include <selinux/selinux.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <libgen.h>
 
 int mkdirs(const char *path, int mode) {
-    char *s = strdup(path);
+    char s[strlen(path) + 1];
+    s[0] = path[0];
+    int a = 1, b = 1;
+    while (a <= strlen(path)) {
+        if (path[a] != '/' || path[a - 1] != '/') {
+            s[b] = path[a];
+            b++;
+        }
+        a++;
+    }
     char *ss = s;
+    while (ss[0] == '/')
+        ss++;
+    if (ss[0] == '\0')
+        return 0;
     while ((ss = strchr(ss, '/')) != nullptr) {
         ss[0] = '\0';
         mkdir(s, mode);
         ss[0] = '/';
         ss++;
     }
-    free(s);
-    return mkdir(path, mode);
+    int ret = mkdir(s, mode);
+    return ret;
 }
- 
+
+char *dirname2(const char *path) {
+    char s[strlen(path) + 1];
+    char p[strlen(path) + 1];
+    s[0] = path[0];
+    int a = 1, b = 1;
+    while (a <= strlen(path)) {
+        if (path[a] != '/' || path[a - 1] != '/') {
+            s[b] = path[a];
+            b++;
+        }
+        a++;
+    }
+    char *ss = s;
+    while (ss[0] == '/')
+        ss++;
+    if (ss[0] == '\0')
+        return nullptr;
+    while ((ss = strchr(ss, '/')) != nullptr) {
+        ss[0] = '\0';
+        strcpy(p, s);
+        ss[0] = '/';
+        ss++;
+    }
+    return strdup(p);
+}
+
+int getmod(const char *file) {
+    int mode = 0;
+    struct stat st;
+    if (stat(file, &st))
+        return -1;
+    #define ADDMOD(perm, bit) \
+    if (st.st_mode & perm) mode += bit;
+    ADDMOD(S_ISUID, 4000)
+    ADDMOD(S_ISGID, 2000)
+    ADDMOD(S_ISVTX, 1000)
+    ADDMOD(S_IRUSR, 400)
+    ADDMOD(S_IWUSR, 200)
+    ADDMOD(S_IXUSR, 100)
+    ADDMOD(S_IRGRP, 40)
+    ADDMOD(S_IWGRP, 20)
+    ADDMOD(S_IXGRP, 10)
+    ADDMOD(S_IROTH, 4)
+    ADDMOD(S_IWOTH, 2)
+    ADDMOD(S_IXOTH, 1)
+    #undef ADDMOD
+    return mode;
+}
+
+int getuidof(const char *file) {
+    struct stat st;
+    if (stat(file, &st))
+        return -1;
+    return st.st_uid;
+}
+
+int getgidof(const char *file) {
+    struct stat st;
+    if (stat(file, &st))
+        return -1;
+    return st.st_gid;
+}
+
+int dump_file(const char *src, const char *dest) {
+    int src_fd = open(src, O_RDONLY);
+    if (src_fd < 0)
+        return -1;
+    int dest_fd = open(dest, O_RDWR | O_CREAT, 644);
+    if (dest_fd < 0) {
+        close(src_fd);
+        return -1;
+    }
+    int buf[1024];
+    while (read(src_fd, buf, sizeof(buf)))
+        write(dest_fd, buf, sizeof(buf));
+    close(src_fd);
+    close(dest_fd);
+    return 0;
+}
 
 std::string tmp_dir;
 
@@ -198,6 +291,7 @@ int fake_return_mount(const char *a, const char *b, const char *c) {
 
 #define mount(a,b,c,d,e) fake_return_mount(a,b,e)
 #define mkdir(a,b) 0
+#define dump_file(a,b) 0
 
 #endif
 
@@ -327,33 +421,39 @@ int overlay_main(int argc, char **argv) {
         if (stat(info.data(), &st))
             continue;
         std::string tmp_mount = tmp_dir + info;
-        if (strcmp(mnt.type.data(), "vfat") != 0 && S_ISDIR(st.st_mode)) {
-            std::string upperdir = std::string(argv[1]) + "/upper" + info;
-            std::string workerdir = std::string(argv[1]) + "/worker" + info;
+
+        std::string upperdir = std::string(argv[1]) + "/upper" + info;
+        std::string workerdir = std::string(argv[1]) + "/worker" + info;
 #if !FAKE_CODE
+        char *con;
+        {
             char *s = strdup(info.data());
             char *ss = s;
-            char *con;
             while ((ss = strchr(ss, '/')) != nullptr) {
                 ss[0] = '\0';
                 auto sub = std::string(argv[1]) + "/upper" + s;
                 if (mkdir(sub.data(), 0755) == 0 && getfilecon(s, &con) >= 0) {
-                    printf("clone selinux context [%s] from %s\n", con, s);
-                    chmod(sub.data(), 0755);
+                    printf("clone attr [%s] from [%s]\n", con, s);
+                    chown(sub.data(), getuidof(s), getgidof(s));
+                    chmod(sub.data(), getmod(s));
                     setfilecon(sub.data(), con);
                     freecon(con);
                 }
                 ss[0] = '/';
                 ss++;
             }
+            free(s);
+        };
+        if (S_ISDIR(st.st_mode))
+        {
             if (mkdir(upperdir.data(), 0755) == 0 && getfilecon(info.data(), &con) >= 0) {
-                printf("clone selinux context [%s] from %s\n", con, info.data());
-                chmod(upperdir.data(), 0755);
+                printf("clone attr [%s] from [%s]\n", con, info.data());
+                chown(upperdir.data(), getuidof(info.data()), getgidof(info.data()));
+                chmod(upperdir.data(), getmod(info.data()));
                 setfilecon(upperdir.data(), con);
                 freecon(con);
             }
             mkdirs(workerdir.data(), 0755);
-            free(s);
 
             if (!is_dir(upperdir.data()) ||
                 !is_dir(workerdir.data())) {
@@ -361,7 +461,9 @@ int overlay_main(int argc, char **argv) {
                 CLEANUP
                 return 1;
             }
+        }
 #endif
+        if (strcmp(mnt.type.data(), "vfat") != 0 && S_ISDIR(st.st_mode)) {
             std::string opts;
             opts += "lowerdir=";
             opts += info.data();
@@ -386,6 +488,18 @@ int overlay_main(int argc, char **argv) {
             }
         } else {
             if (mount(info.data(), tmp_mount.data(), nullptr, MS_BIND, nullptr)) {
+                // mount fails, copy file to upperdir
+                char *con;
+                if (!S_ISDIR(st.st_mode) && getfilecon(info.data(), &con) >= 0) {
+                    if (access(upperdir.data(), F_OK) != 0 && dump_file(info.data(), upperdir.data()) == 0) {
+                        printf("clone: %s\n", upperdir.data());
+                        chmod(upperdir.data(), getmod(info.data())); 
+                        chown(upperdir.data(), getuidof(info.data()), getgidof(info.data()));
+                        setfilecon(upperdir.data(), con);
+                    }
+                    freecon(con);
+                    continue;
+                }
                 printf("mount failed, abort!\n");
                 CLEANUP
                 return 1;
