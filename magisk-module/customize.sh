@@ -65,16 +65,7 @@ if $is_support; then
     ui_print "- Directly use folder in /data"
     // clone dummy
 else
-    ui_print "! Cannot directly use /data"
-    ui_print "- Create 1,5GB (enough?) loop device..."
-    rm -rf /data/adb/overlay.img
-    dd if=/dev/zero of=/data/adb/overlay.img bs=1000000 count=1500
-    /system/bin/mkfs.ext4 /data/adb/overlay.img
-    loop_setup /data/adb/overlay.img
-    if [ -z "$LOOPDEV" ]; then
-        rm -rf /data/adb/overlay.img
-        abort "! Setup failed"
-    fi
+    abort "! Cannot use folder in /data"
 fi
 
 unzip -oj "$ZIPFILE" post-fs-data.sh "libs/$ABI/overlayfs_system" -d "$MODPATH" 1>&2
