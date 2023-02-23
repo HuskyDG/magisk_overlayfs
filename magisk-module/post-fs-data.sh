@@ -1,24 +1,28 @@
 MODDIR="${0%/*}"
 
+MAGISKTMP="$(magisk --path)" || MAGISKTMP=/sbin
+DATAMIRROR="$MAGISKTMP/.magisk/mirror/data"
+OVERLAYDIR="$DATAMIRROR/adb/overlay"
+OVERLAYMNT="/mnt/overlay_system"
+
 mv -fT /cache/overlayfs.log /cache/overlayfs.log.bak
 rm -rf /cache/overlayfs.log
 echo "--- Start debugging log ---" >/cache/overlayfs.log
 
-mkdir -p /mnt/overlay_system
-mkdir -p /data/adb/overlay
+mkdir -p "$OVERLAYMNT"
+mkdir -p "$OVERLAYDIR"
 
-if [ -d /data/adb/overlay ]; then
-    echo "mount: /data/adb/overlay -> /mnt/overlay_system" >>/cache/overlayfs.log
-    mount --bind "/data/adb/overlay" /mnt/overlay_system
+if [ -d "$OVERLAYDIR" ]; then
+    mount --bind "$OVERLAYDIR" "$OVERLAYMNT"
 else
     echo "unable to mount writeable dir" >>/cache/overlayfs.log
     exit
 fi
 # overlay_system <writeable-dir> <mirror>
 chmod 777 "$MODDIR/overlayfs_system"
-"$MODDIR/overlayfs_system" /mnt/overlay_system "$(magisk --path)/.magisk/mirror" | tee -a /cache/overlayfs.log
-umount -l /mnt/overlay_system
-rmdir /mnt/overlay_system
+"$MODDIR/overlayfs_system" "$OVERLAYMNT" "$MAGISKTMP/.magisk/mirror" | tee -a /cache/overlayfs.log
+umount -l "$OVERLAYMNT"
+rmdir "$OVERLAYMNT"
 
 echo "--- Mountinfo ---" >>/cache/overlayfs.log
 cat /proc/mounts >>/cache/overlayfs.log
